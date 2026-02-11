@@ -118,13 +118,13 @@ def build_key_mapping():
 
     # Encoder down blocks
     downsample_map = [
-        (0, 3, "resnet", 0), (1, 3, "resnet", 1), (2, 3, "resnet", 2),
-        (3, 3, "downsampler", 0),
-        (4, 2, "resnet", 0), (5, 2, "resnet", 1), (6, 2, "resnet", 2),
-        (7, 2, "downsampler", 0),
-        (8, 1, "resnet", 0), (9, 1, "resnet", 1), (10, 1, "resnet", 2),
-        (11, 1, "downsampler", 0),
-        (12, 0, "resnet", 0), (13, 0, "resnet", 1), (14, 0, "resnet", 2),
+        (0, 0, "resnet", 0), (1, 0, "resnet", 1),
+        (2, 0, "downsampler", 0),
+        (3, 1, "resnet", 0), (4, 1, "resnet", 1),
+        (5, 1, "downsampler", 0),
+        (6, 2, "resnet", 0), (7, 2, "resnet", 1),
+        (8, 2, "downsampler", 0),
+        (9, 3, "resnet", 0), (10, 3, "resnet", 1),
     ]
 
     for file_idx, block_idx, typ, sub_idx in downsample_map:
@@ -137,14 +137,14 @@ def build_key_mapping():
             mapping[f"{fp}.residual.3.gamma"] = f"{mp}.norm2.gamma"
             mapping[f"{fp}.residual.6.weight"] = f"{mp}.conv2.weight"
             mapping[f"{fp}.residual.6.bias"] = f"{mp}.conv2.bias"
-            if file_idx == 4:  # encoder shortcut
+            if file_idx in [3, 6]:  # encoder shortcut
                 mapping[f"{fp}.shortcut.weight"] = f"{mp}.conv_shortcut.weight"
                 mapping[f"{fp}.shortcut.bias"] = f"{mp}.conv_shortcut.bias"
         elif typ == "downsampler":
             mp = f"encoder.down_blocks.{block_idx}.downsamplers.0"
             mapping[f"{fp}.resample.1.weight"] = f"{mp}.resample.1.weight"
             mapping[f"{fp}.resample.1.bias"] = f"{mp}.resample.1.bias"
-            if block_idx >= 2:
+            if block_idx >= 1:
                 mapping[f"{fp}.time_conv.weight"] = f"{mp}.time_conv.weight"
                 mapping[f"{fp}.time_conv.bias"] = f"{mp}.time_conv.bias"
 

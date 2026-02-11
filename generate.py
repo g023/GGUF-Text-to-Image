@@ -67,7 +67,7 @@ def generate_image(
     seeds=None,
     device="cuda",
     dtype=torch.bfloat16,
-    dit_path="GGUF/Qwen-Rapid-NSW-v23_Q3_K.gguf",
+    dit_path="GGUF/Qwen-Rapid-NSW-v23_Q4_K.gguf",
     te_path="GGUF/Qwen2.5-VL-7B-Instruct-abliterated.Q4_K_M.gguf",
     vae_path="GGUF/qwen_image_vae.safetensors",
     sampler_name="euler",
@@ -83,6 +83,8 @@ def generate_image(
         List of PIL Images.
     """
     total_start = time.time()
+
+    print(f"Initial GPU memory: allocated={torch.cuda.memory_allocated()/1024**2:.0f}MB, reserved={torch.cuda.memory_reserved()/1024**2:.0f}MB")
 
     # Normalize inputs
     if isinstance(prompts, str):
@@ -110,6 +112,8 @@ def generate_image(
     print(f"Generating {batch_size}x {width}x{height} images ({latent_w}x{latent_h} latent)")
     print(f"Steps: {num_steps}, Seeds: {seeds}")
     print(f"Sampler: {sampler_name}, Scheduler: {scheduler_name}, Prompt: {prompt_processor_name}")
+
+    print(f"GPU before text encoding: allocated={torch.cuda.memory_allocated()/1024**2:.0f}MB, reserved={torch.cuda.memory_reserved()/1024**2:.0f}MB")
 
     # ============ STEP 1: Text Encoding ============
     print("\n[Step 1/3] Text Encoding...")
@@ -142,14 +146,18 @@ def generate_image(
     print(f"  Batched text embeddings: {txt_hidden.shape}")
     print(f"  Text encoding took {time.time()-step_start:.1f}s")
 
+    print(f"  GPU after text encoding: allocated={torch.cuda.memory_allocated()/1024**2:.0f}MB, reserved={torch.cuda.memory_reserved()/1024**2:.0f}MB")
+
     # Offload text encoder
     del text_encoder
     torch.cuda.empty_cache()
-    print(f"  GPU after offload: {torch.cuda.memory_allocated()/1024**2:.0f}MB")
+    print(f"  GPU after text offload: allocated={torch.cuda.memory_allocated()/1024**2:.0f}MB, reserved={torch.cuda.memory_reserved()/1024**2:.0f}MB")
 
     # ============ STEP 2: Denoising ============
     print("\n[Step 2/3] Denoising...")
     step_start = time.time()
+
+    print(f"GPU before denoising: allocated={torch.cuda.memory_allocated()/1024**2:.0f}MB, reserved={torch.cuda.memory_reserved()/1024**2:.0f}MB")
 
     # Generate noise for each seed
     latent_noises = []
@@ -193,17 +201,23 @@ def generate_image(
 
     print(f"  Denoising took {time.time()-step_start:.1f}s")
 
+    print(f"  GPU after denoising: allocated={torch.cuda.memory_allocated()/1024**2:.0f}MB, reserved={torch.cuda.memory_reserved()/1024**2:.0f}MB")
+
     # Offload DiT
     del dit
+    del txt_hidden  # Free text embeddings after denoising
     torch.cuda.empty_cache()
-    print(f"  GPU after offload: {torch.cuda.memory_allocated()/1024**2:.0f}MB")
+    print(f"  GPU after denoising offload: allocated={torch.cuda.memory_allocated()/1024**2:.0f}MB, reserved={torch.cuda.memory_reserved()/1024**2:.0f}MB")
 
     # ============ STEP 3: VAE Decode ============
     print("\n[Step 3/3] VAE Decoding...")
     step_start = time.time()
 
+    print(f"GPU before VAE: allocated={torch.cuda.memory_allocated()/1024**2:.0f}MB, reserved={torch.cuda.memory_reserved()/1024**2:.0f}MB")
+
     # Unpatchify
     latent_img = unpatchify(latent, pH, pW, channels=latent_channels, patch_size=patch_size)
+    del latent  # Free patched latents after unpatchify
     print(f"  Unpatchified latent: {latent_img.shape}")
 
     # Load VAE
@@ -220,26 +234,34 @@ def generate_image(
 
     # Decode
     decoded = vae.decode(latent_img).sample
+    del latent_img  # Free input latents after decode
     print(f"  VAE output: {decoded.shape}")
     print(f"  VAE decoding took {time.time()-step_start:.1f}s")
+
+    print(f"  GPU after VAE decode: allocated={torch.cuda.memory_allocated()/1024**2:.0f}MB, reserved={torch.cuda.memory_reserved()/1024**2:.0f}MB")
 
     # Offload VAE
     del vae
     torch.cuda.empty_cache()
+    print(f"  GPU after VAE offload: allocated={torch.cuda.memory_allocated()/1024**2:.0f}MB, reserved={torch.cuda.memory_reserved()/1024**2:.0f}MB")
 
     # Convert to images
     decoded = decoded.squeeze(2)  # Remove T dim: [B, 3, H, W]
     images = []
     for b in range(batch_size):
-        img_tensor = decoded[b]  # [3, H, W]
+        img_tensor = decoded[b].cpu()  # Move to CPU first
         img_tensor = img_tensor.float().clamp(-1, 1)
         img_tensor = (img_tensor + 1) / 2  # [-1,1] -> [0,1]
-        img_array = (img_tensor * 255).byte().cpu().numpy()
+        img_array = (img_tensor * 255).byte().numpy()
         img_array = img_array.transpose(1, 2, 0)  # CHW -> HWC
         images.append(Image.fromarray(img_array))
+    del decoded  # Free decoded tensor after conversion
+
+    print(f"GPU after image conversion: allocated={torch.cuda.memory_allocated()/1024**2:.0f}MB, reserved={torch.cuda.memory_reserved()/1024**2:.0f}MB")
 
     total_time = time.time() - total_start
     print(f"\nTotal generation time: {total_time:.1f}s ({total_time/batch_size:.1f}s/image)")
+    print(f"Peak GPU memory used: {torch.cuda.max_memory_allocated()/1024**2:.0f}MB")
 
     return images
 
